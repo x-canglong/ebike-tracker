@@ -16,15 +16,23 @@
           </template>
         </van-field>
         
-        <van-cell title="充电方式">
-          <template #value>
-            <van-radio-group v-model="form.chargeType" direction="horizontal" @change="onChargeTypeChange">
-              <van-radio name="jinqiao">金桥智电</van-radio>
-              <van-radio name="fulian">富联e充</van-radio>
-              <van-radio name="manual">手动投币</van-radio>
-            </van-radio-group>
-          </template>
-        </van-cell>
+        <van-field
+          :model-value="chargeTypeDisplay"
+          name="chargeType"
+          label="充电方式"
+          is-link
+          readonly
+          placeholder="请选择充电方式"
+          @click="showChargeTypePicker = true"
+        />
+        <van-popup v-model:show="showChargeTypePicker" position="bottom">
+          <van-picker
+            v-model="chargeTypePickerIndex"
+            :columns="chargeTypeOptions"
+            @confirm="onChargeTypeConfirm"
+            @cancel="showChargeTypePicker = false"
+          />
+        </van-popup>
         
         <van-field
           v-model="form.charge_minutes"
@@ -79,7 +87,7 @@
 </template>
 
 <script setup>
-import { ref, defineProps, defineEmits, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 
 const props = defineProps({
   submitting: {
@@ -90,24 +98,59 @@ const props = defineProps({
 
 const emit = defineEmits(['submit'])
 
+const chargeTypeOptions = [
+  { text: '金桥智电', value: 'jinqiao' },
+  { text: '富联e充', value: 'fulian' },
+  { text: '手动投币', value: 'manual' }
+]
+
+const showChargeTypePicker = ref(false)
+
+// 从localStorage读取上次选择的充电方式
+const getLastChargeType = () => {
+  const lastType = localStorage.getItem('lastChargeType')
+  return lastType || 'jinqiao'
+}
+
+const getChargeTypeIndex = (type) => {
+  const index = chargeTypeOptions.findIndex(opt => opt.value === type)
+  return index >= 0 ? index : 0
+}
+
 const form = ref({
   mileage: '',
-  chargeType: 'jinqiao', // 默认金桥智电
+  chargeType: getLastChargeType(),
   charge_minutes: '480', // 默认480分钟
   cost: '2', // 默认2元
   note: ''
 })
 
-// 充电方式改变时的处理
-const onChargeTypeChange = (value) => {
+const chargeTypePickerIndex = ref([getChargeTypeIndex(getLastChargeType())])
+
+// 计算充电方式显示文本
+const chargeTypeDisplay = computed(() => {
+  const option = chargeTypeOptions.find(opt => opt.value === form.value.chargeType)
+  return option ? option.text : ''
+})
+
+// 充电方式确认时的处理
+const onChargeTypeConfirm = ({ selectedOptions }) => {
+  const selected = selectedOptions[0]
+  form.value.chargeType = selected.value
+  chargeTypePickerIndex.value = [getChargeTypeIndex(selected.value)]
+  // 保存到localStorage
+  localStorage.setItem('lastChargeType', selected.value)
   // 所有充电方式都默认2元480分钟
   form.value.cost = '2'
   form.value.charge_minutes = '480'
+  showChargeTypePicker.value = false
 }
 
 // 初始化时设置默认值
 onMounted(() => {
-  form.value.chargeType = 'jinqiao'
+  const lastType = getLastChargeType()
+  form.value.chargeType = lastType
+  chargeTypePickerIndex.value = [getChargeTypeIndex(lastType)]
   form.value.charge_minutes = '480'
   form.value.cost = '2'
 })
@@ -122,6 +165,9 @@ const handleSubmit = () => {
   }
   
   emit('submit', data)
+  
+  // 保存当前充电方式到localStorage
+  localStorage.setItem('lastChargeType', form.value.chargeType)
   
   // 清空表单，但保留默认值
   form.value = {

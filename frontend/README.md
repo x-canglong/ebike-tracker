@@ -1,6 +1,6 @@
-# 电瓶车充电记录 - 前端
+# 充电记录 - 前端
 
-基于 Vue 3 + Vite + Vant 4 开发的移动端电瓶车充电记录管理系统。
+基于 Vue 3 + Vite + Vant 4 开发的移动端充电记录管理系统。
 
 ## 技术栈
 
@@ -26,7 +26,7 @@ npm install
 npm run dev
 ```
 
-开发服务器默认运行在 `http://localhost:5173`
+开发服务器默认运行在 `http://localhost:5174`
 
 ## 构建
 

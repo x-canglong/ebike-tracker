@@ -22,7 +22,9 @@ import {
   Radio,
   RadioGroup,
   Popup,
-  Dialog
+  Picker,
+  Dialog,
+  Toast
 } from 'vant'
 
 const app = createApp(App)
@@ -46,6 +48,8 @@ app.use(Radio)
 app.use(RadioGroup)
 app.use(Popup)
 app.use(Dialog)
+app.use(Picker)
+app.use(Toast)
 
 // 挂载应用
 app.mount('#app')

@@ -98,15 +98,23 @@
               </template>
             </van-field>
             
-            <van-cell title="充电方式">
-              <template #value>
-                <van-radio-group v-model="editForm.charge_type" direction="horizontal">
-                  <van-radio name="jinqiao">金桥智电</van-radio>
-                  <van-radio name="fulian">富联e充</van-radio>
-                  <van-radio name="manual">手动投币</van-radio>
-                </van-radio-group>
-              </template>
-            </van-cell>
+            <van-field
+              :model-value="chargeTypeDisplay"
+              name="charge_type"
+              label="充电方式"
+              is-link
+              readonly
+              placeholder="请选择充电方式"
+              @click="showChargeTypePicker = true"
+            />
+            <van-popup v-model:show="showChargeTypePicker" position="bottom">
+              <van-picker
+                v-model="chargeTypePickerIndex"
+                :columns="chargeTypeOptions"
+                @confirm="onChargeTypeConfirm"
+                @cancel="showChargeTypePicker = false"
+              />
+            </van-popup>
             
             <van-field
               v-model="editForm.note"
@@ -138,7 +146,7 @@
 </template>
 
 <script setup>
-import { ref, defineProps, defineEmits } from 'vue'
+import { ref, computed } from 'vue'
 import { showSuccessToast, showFailToast } from 'vant'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -161,7 +169,15 @@ const props = defineProps({
 
 const emit = defineEmits(['refresh', 'update:refreshing', 'updated'])
 
+const chargeTypeOptions = [
+  { text: '金桥智电', value: 'jinqiao' },
+  { text: '富联e充', value: 'fulian' },
+  { text: '手动投币', value: 'manual' }
+]
+
 const showEditDialog = ref(false)
+const showChargeTypePicker = ref(false)
+const chargeTypePickerIndex = ref([0])
 const updating = ref(false)
 const editForm = ref({
   id: null,
@@ -175,14 +191,19 @@ const editForm = ref({
 const formatTime = (timestamp) => {
   const date = dayjs(timestamp)
   const now = dayjs()
-  const diff = now.diff(date, 'day')
   
-  if (diff === 0) {
+  // 比较日期部分，忽略时间
+  const targetDate = date.format('YYYY-MM-DD')
+  const today = now.format('YYYY-MM-DD')
+  const yesterday = now.subtract(1, 'day').format('YYYY-MM-DD')
+  const daysAgo = now.startOf('day').diff(date.startOf('day'), 'day')
+  
+  if (targetDate === today) {
     return '今天 ' + date.format('HH:mm')
-  } else if (diff === 1) {
+  } else if (targetDate === yesterday) {
     return '昨天 ' + date.format('HH:mm')
-  } else if (diff < 7) {
-    return diff + '天前'
+  } else if (daysAgo < 7) {
+    return daysAgo + '天前'
   } else {
     return date.format('MM-DD HH:mm')
   }
@@ -208,6 +229,12 @@ const getChargeTypeName = (type) => {
   return typeMap[type] || type
 }
 
+// 计算充电方式显示文本
+const chargeTypeDisplay = computed(() => {
+  const option = chargeTypeOptions.find(opt => opt.value === editForm.value.charge_type)
+  return option ? option.text : ''
+})
+
 const openEditDialog = (record) => {
   editForm.value = {
     id: record.id,
@@ -217,7 +244,17 @@ const openEditDialog = (record) => {
     charge_type: record.charge_type || 'jinqiao',
     note: record.note || ''
   }
+  // 设置picker的默认选中索引
+  const index = chargeTypeOptions.findIndex(opt => opt.value === editForm.value.charge_type)
+  chargeTypePickerIndex.value = [index >= 0 ? index : 0]
   showEditDialog.value = true
+}
+
+const onChargeTypeConfirm = ({ selectedOptions }) => {
+  const selected = selectedOptions[0]
+  editForm.value.charge_type = selected.value
+  chargeTypePickerIndex.value = [chargeTypeOptions.findIndex(opt => opt.value === selected.value)]
+  showChargeTypePicker.value = false
 }
 
 const handleUpdate = async () => {

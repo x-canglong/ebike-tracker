@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "vite build --mode prd",
+    "preview": "vite preview",
+    "push": "node deploy.js"
   },
   "dependencies": {
     "axios": "^1.13.2",

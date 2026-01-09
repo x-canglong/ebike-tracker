@@ -27,3 +27,9 @@ backend/node_modules
 frontend/node_modules
 backend/package-lock.json
 frontend/package-lock.json
+
+# 环境变量文件
+.env
+backend/.env
+frontend/dist
+frontend/.vscode/*

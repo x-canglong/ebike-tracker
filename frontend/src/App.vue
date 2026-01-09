@@ -1,6 +1,6 @@
 <template>
   <div id="app">
-    <van-nav-bar title="电瓶车充电记录" fixed placeholder />
+    <van-nav-bar title="充电记录" fixed placeholder />
     
     <van-tabs v-model:active="activeTab" sticky offset-top="46">
       <!-- 统计标签页 -->
@@ -38,7 +38,7 @@ import StatsView from './components/StatsView.vue'
 import RecordsView from './components/RecordsView.vue'
 import AddRecordView from './components/AddRecordView.vue'
 
-const activeTab = ref('stats')
+const activeTab = ref('add')
 const refreshing = ref(false)
 const submitting = ref(false)
 const records = ref([])
