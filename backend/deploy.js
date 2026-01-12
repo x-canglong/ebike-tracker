@@ -1,5 +1,5 @@
-import { execSync } from "child_process";
-import path from "path";
+const { execSync } = require("child_process");
+const path = require("path");
 
 // 核心配置
 const config = {
@@ -7,14 +7,17 @@ const config = {
   sshPort: 57,
   username: "root",
   privateKey: "D:\\xmh_dev_wsl",
-  remoteAppDir: "/opt/ebike-tracker-backend/",
-  remoteRestartScript: "/opt/ebike-tracker-backend/restart-app.sh"
+  remoteAppDir: "/www/dk_project/dk_app/ebike-tracker-backend/"
 };
 
 // 要上传的文件列表
 const filesToUpload = [
   path.resolve("server.js"),
-  path.resolve("package.json")
+  path.resolve("package.json"),
+  path.resolve("package-lock.json"),
+  path.resolve("Dockerfile"),
+  path.resolve("docker-compose.yml"),
+  path.resolve(".dockerignore")
 ];
 
 /**
@@ -46,12 +49,21 @@ ${config.username}@${config.server}:${config.remoteAppDir}
 `.replace(/\n/g, " ").trim(); // 去掉换行，避免解析问题
 runCommand(uploadCmd);
 
-// 第三步：执行服务器上的重启脚本（核心！）
-console.log("\n🔄 步骤2：执行服务器重启脚本...");
+// 第三步：构建 Docker 镜像
+console.log("\n🔄 步骤2：构建 Docker 镜像...");
+const buildCmd = `
+ssh -p ${config.sshPort} -i "${config.privateKey}" \
+${config.username}@${config.server} \
+"cd ${config.remoteAppDir} && npm install && docker build -t ebike-tracker-backend:latest ."
+`.replace(/\n/g, " ").trim();
+runCommand(buildCmd);
+
+// 第四步：重启容器
+console.log("\n🔄 步骤3：重启 Docker 容器...");
 const restartCmd = `
 ssh -p ${config.sshPort} -i "${config.privateKey}" \
 ${config.username}@${config.server} \
-"cd ${config.remoteAppDir} && ./restart-app.sh"
+"cd ${config.remoteAppDir} && docker-compose down && docker-compose up -d"
 `.replace(/\n/g, " ").trim();
 runCommand(restartCmd);
 
