@@ -1,127 +1,154 @@
 require('dotenv').config();
 const express = require('express');
-const mysql = require('mysql2');
+const mysql = require('mysql2/promise');
 const cors = require('cors');
 const app = express();
 
-// 中间件
-app.use(cors());                // 允许前端跨域访问
-app.use(express.json());        // 解析 JSON 请求体
+// --- 中间件 ---
+app.use(cors());
+app.use(express.json());
 
-// 请求日志中间件
+// 请求日志记录
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${req.method} ${req.path} - IP: ${req.ip}`);
-  if (req.body && Object.keys(req.body).length > 0) {
-    console.log(`[${timestamp}] 请求体:`, JSON.stringify(req.body));
-  }
-  if (req.params && Object.keys(req.params).length > 0) {
-    console.log(`[${timestamp}] 路径参数:`, JSON.stringify(req.params));
-  }
-  if (req.query && Object.keys(req.query).length > 0) {
-    console.log(`[${timestamp}] 查询参数:`, JSON.stringify(req.query));
-  }
   next();
 });
 
-// MySQL 连接配置（从环境变量读取）
-const db = mysql.createConnection({
+// --- MySQL 配置 ---
+const poolConfig = {
   host: process.env.DB_HOST,
   port: process.env.DB_PORT,
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME
-});
+  database: process.env.DB_NAME,
+  timezone: 'Asia/Shanghai',
+  waitForConnections: true,
+  connectionLimit: 10,
+  maxIdle: 10,
+  idleTimeout: 60000,
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 0
+};
 
-// 连接数据库
-db.connect(err => {
-  if (err) {
-    console.error('[数据库] 连接失败:', err.message);
-    console.error('[数据库] 错误详情:', err);
-    process.exit(1);
+// --- 全局连接池变量与状态锁 ---
+let pool = mysql.createPool(poolConfig);
+let isRecreating = false; // 重建锁，防止并发重建冲突
+
+// --- 核心工具函数：重建连接池 ---
+async function handlePoolRecreation() {
+  if (isRecreating) {
+    console.log('[数据库] 连接池正在重建中，跳过本次重复请求...');
+    return;
   }
-  console.log('[数据库] MySQL 连接成功');
-  console.log('[数据库] 主机:', process.env.DB_HOST);
-  console.log('[数据库] 端口:', process.env.DB_PORT);
-  console.log('[数据库] 数据库名:', process.env.DB_NAME);
-});
 
-// 添加记录
-app.post('/add_record', (req, res) => {
-  console.log('[POST /add_record] 开始处理添加记录请求');
+  isRecreating = true;
+  try {
+    console.log('[数据库] 启动连接池销毁与重建流程...');
+    try {
+      await pool.end(); // 尝试关闭旧连接池
+    } catch (e) {
+      console.log('[数据库] 关闭旧连接池时忽略的错误:', e.message);
+    }
+
+    pool = mysql.createPool(poolConfig);
+    
+    // 立即测试新连接
+    const conn = await pool.getConnection();
+    await conn.ping();
+    conn.release();
+    console.log('[数据库] 连接池重建成功且测试通过');
+  } catch (err) {
+    console.error('[数据库] 连接池重建最终失败:', err.message);
+  } finally {
+    isRecreating = false;
+  }
+}
+
+// --- 核心工具函数：带重试逻辑的执行器 ---
+async function executeQuery(sql, params = [], retries = 3) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const [results] = await pool.query(sql, params);
+      return results;
+    } catch (err) {
+      console.error(`[数据库] 查询失败 (尝试 ${i + 1}/${retries}):`, err.message);
+      
+      // 判断是否需要重建连接池的错误类型
+      const isConnectionError = 
+          err.code === 'PROTOCOL_CONNECTION_LOST' || 
+          err.code === 'ECONNRESET' || 
+          err.code === 'ETIMEDOUT' ||
+          err.code === 'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR' ||
+          (err.message && err.message.includes('Pool is closed'));
+
+      if (isConnectionError) {
+        console.log('[数据库] 检测到关键连接错误，触发重建...');
+        await handlePoolRecreation();
+      }
+      
+      if (i === retries - 1) throw err;
+      await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1))); // 退避重试
+    }
+  }
+}
+
+// --- 定期健康检查 ---
+setInterval(async () => {
+  try {
+    const connection = await pool.getConnection();
+    await connection.ping();
+    connection.release();
+  } catch (err) {
+    console.error('[数据库] 定期健康检查失败:', err.message);
+    await handlePoolRecreation();
+  }
+}, 30000);
+
+// --- API 路由 ---
+
+// 1. 添加记录
+app.post('/add_record', async (req, res) => {
   const { mileage, charge_minutes, cost, charge_type, note = '' } = req.body;
-  console.log('[POST /add_record] 接收到的数据:', { mileage, charge_minutes, cost, charge_type, note });
-  
-  if (!mileage) {
-    console.warn('[POST /add_record] 验证失败: mileage 字段缺失');
-    return res.status(400).json({ error: 'Mileage is required' });
-  }
+  if (!mileage) return res.status(400).json({ error: '里程(mileage)是必填项' });
   
   const sql = `INSERT INTO records (timestamp, mileage, charge_minutes, cost, charge_type, note) VALUES (NOW(), ?, ?, ?, ?, ?)`;
   const params = [mileage, charge_minutes || null, cost || null, charge_type || null, note];
-  console.log('[POST /add_record] 执行SQL:', sql);
-  console.log('[POST /add_record] SQL参数:', params);
   
-  db.query(sql, params, (err, result) => {
-    if (err) {
-      console.error('[POST /add_record] 数据库操作失败:', err.message);
-      console.error('[POST /add_record] 错误详情:', err);
-      return res.status(500).json({ error: err.message });
-    }
-    console.log('[POST /add_record] 记录添加成功, ID:', result.insertId);
-    console.log('[POST /add_record] 受影响行数:', result.affectedRows);
-    res.status(201).json({ message: 'Record added' });
-  });
+  try {
+    const result = await executeQuery(sql, params);
+    res.status(201).json({ message: '记录添加成功', id: result.insertId });
+  } catch (err) {
+    res.status(500).json({ error: '保存失败: ' + err.message });
+  }
 });
 
-// 更新记录
-app.put('/update_record/:id', (req, res) => {
+// 2. 更新记录
+app.put('/update_record/:id', async (req, res) => {
   const { id } = req.params;
-  console.log('[PUT /update_record/:id] 开始处理更新记录请求, ID:', id);
   const { mileage, charge_minutes, cost, charge_type, note } = req.body;
-  console.log('[PUT /update_record/:id] 接收到的数据:', { mileage, charge_minutes, cost, charge_type, note });
   
   const sql = `UPDATE records SET mileage = ?, charge_minutes = ?, cost = ?, charge_type = ?, note = ? WHERE id = ?`;
   const params = [mileage, charge_minutes || null, cost || null, charge_type || null, note || '', id];
-  console.log('[PUT /update_record/:id] 执行SQL:', sql);
-  console.log('[PUT /update_record/:id] SQL参数:', params);
   
-  db.query(sql, params, (err, result) => {
-    if (err) {
-      console.error('[PUT /update_record/:id] 数据库操作失败:', err.message);
-      console.error('[PUT /update_record/:id] 错误详情:', err);
-      return res.status(500).json({ error: err.message });
-    }
-    console.log('[PUT /update_record/:id] 受影响行数:', result.affectedRows);
-    if (result.affectedRows === 0) {
-      console.warn('[PUT /update_record/:id] 记录未找到, ID:', id);
-      return res.status(404).json({ error: 'Record not found' });
-    }
-    console.log('[PUT /update_record/:id] 记录更新成功, ID:', id);
-    res.json({ message: 'Record updated' });
-  });
+  try {
+    const result = await executeQuery(sql, params);
+    if (result.affectedRows === 0) return res.status(404).json({ error: '未找到该记录' });
+    res.json({ message: '记录更新成功' });
+  } catch (err) {
+    res.status(500).json({ error: '更新失败: ' + err.message });
+  }
 });
 
-// 获取所有记录（倒序）
-app.get('/records', (req, res) => {
-  console.log('[GET /records] 开始处理获取记录列表请求');
-  const sql = `SELECT * FROM records ORDER BY id DESC`;
-  console.log('[GET /records] 执行SQL:', sql);
-  
-  db.query(sql, (err, results) => {
-    if (err) {
-      console.error('[GET /records] 数据库查询失败:', err.message);
-      console.error('[GET /records] 错误详情:', err);
-      return res.status(500).json({ error: err.message });
-    }
-    console.log('[GET /records] 查询成功, 记录数:', results.length);
-
-    // 计算本次续航里程
+// 3. 获取列表（带里程差值计算）
+app.get('/records', async (req, res) => {
+  try {
+    const results = await executeQuery(`SELECT * FROM records ORDER BY mileage ASC`);
+    
+    // 计算本次续航
     const formatted = [];
     let prevMileage = null;
-    // 因为倒序，先反转算差值，再反回来
-    const reversed = [...results].reverse();
-    for (const rec of reversed) {
+    for (const rec of results) {
       const current = parseFloat(rec.mileage);
       const diff = prevMileage !== null ? current - prevMileage : null;
       formatted.push({
@@ -129,74 +156,58 @@ app.get('/records', (req, res) => {
         timestamp: rec.timestamp,
         mileage: current,
         diff: diff !== null ? Math.round(diff * 100) / 100 : null,
-        charge_minutes: rec.charge_minutes ? parseFloat(rec.charge_minutes) : null,
+        charge_minutes: rec.charge_minutes,
         cost: rec.cost ? parseFloat(rec.cost) : null,
-        charge_type: rec.charge_type || null,
+        charge_type: rec.charge_type,
         note: rec.note
       });
       prevMileage = current;
     }
-    formatted.reverse(); // 恢复倒序显示
-
-    console.log('[GET /records] 数据处理完成, 返回记录数:', formatted.length);
-    res.json(formatted);
-  });
+    res.json(formatted.reverse()); // 恢复为最新在前的顺序返回
+  } catch (err) {
+    res.status(500).json({ error: '获取失败: ' + err.message });
+  }
 });
 
-// 获取统计
-app.get('/stats', (req, res) => {
-  console.log('[GET /stats] 开始处理获取统计信息请求');
-  const sql = `SELECT mileage, cost, charge_minutes FROM records ORDER BY id`;
-  console.log('[GET /stats] 执行SQL:', sql);
-  
-  db.query(sql, (err, rows) => {
-    if (err) {
-      console.error('[GET /stats] 数据库查询失败:', err.message);
-      console.error('[GET /stats] 错误详情:', err);
-      return res.status(500).json({ error: err.message });
-    }
-    console.log('[GET /stats] 查询成功, 记录数:', rows.length);
+// 4. 获取统计数据（逻辑修正版）
+app.get('/stats', async (req, res) => {
+  try {
+    const rows = await executeQuery(`SELECT mileage, cost, charge_minutes FROM records ORDER BY mileage ASC`);
     
     if (rows.length === 0) {
-      console.log('[GET /stats] 无记录, 返回默认统计值');
-      return res.json({ total_mileage: 0, avg_mileage_per_charge: 0, total_cost: 0, avg_cost_per_charge: 0, avg_charge_minutes: 0, charge_count: 0 });
+      return res.json({ total_mileage: 0, avg_mileage_per_charge: 0, total_cost: 0, charge_count: 0 });
     }
 
-    const totalMileage = parseFloat(rows[rows.length - 1].mileage);
-    console.log('[GET /stats] 总里程:', totalMileage);
-    
-    const diffs = [];
-    for (let i = 1; i < rows.length; i++) {
-      diffs.push(parseFloat(rows[i].mileage) - parseFloat(rows[i - 1].mileage));
-    }
-    const avgMileage = diffs.length ? diffs.reduce((a, b) => a + b, 0) / diffs.length : 0;
-    console.log('[GET /stats] 平均每次充电里程:', avgMileage);
-    
-    // 计算平均充电时长（分钟）
-    const chargeMinutes = rows.map(r => parseFloat(r.charge_minutes) || 0).filter(m => m > 0);
-    const avgChargeMinutes = chargeMinutes.length ? chargeMinutes.reduce((a, b) => a + b, 0) / chargeMinutes.length : 0;
-    console.log('[GET /stats] 平均充电时长:', avgChargeMinutes, '分钟');
+    const firstMileage = parseFloat(rows[0].mileage);
+    const lastMileage = parseFloat(rows[rows.length - 1].mileage);
 
     const costs = rows.map(r => parseFloat(r.cost) || 0).filter(c => c > 0);
     const totalCost = costs.reduce((a, b) => a + b, 0);
-    const avgCost = rows.length ? totalCost / rows.length : 0;
-    console.log('[GET /stats] 总费用:', totalCost);
-    console.log('[GET /stats] 平均每次费用:', avgCost);
+    
+    const minutes = rows.map(r => parseFloat(r.charge_minutes) || 0).filter(m => m > 0);
+    const avgMinutes = minutes.length ? minutes.reduce((a, b) => a + b, 0) / minutes.length : 0;
 
-    const stats = {
-      total_mileage: Math.round(totalMileage * 100) / 100,
-      avg_mileage_per_charge: Math.round(avgMileage * 100) / 100,
+    res.json({
+      total_mileage: Math.round(lastMileage * 100) / 100,
       total_cost: Math.round(totalCost * 100) / 100,
-      avg_cost_per_charge: Math.round(avgCost * 100) / 100,
-      avg_charge_minutes: Math.round(avgChargeMinutes),
-      charge_count: rows.length
-    };
-    console.log('[GET /stats] 统计计算完成, 返回结果:', stats);
-    res.json(stats);
-  });
+      charge_count: rows.length,
+      avg_charge_minutes: Math.round(avgMinutes),
+      avg_mileage_per_charge: Math.round(lastMileage / rows.length * 100) / 100,
+      avg_cost_per_charge: rows.length > 0 ? Math.round((totalCost / rows.length) * 100) / 100 : 0
+    });
+  } catch (err) {
+    res.status(500).json({ error: '统计计算失败: ' + err.message });
+  }
 });
 
-// 启动服务器
+// --- 优雅退出 ---
+process.on('SIGINT', async () => {
+  await pool.end();
+  console.log('[服务器] 连接池已安全关闭');
+  process.exit(0);
+});
+
+// --- 启动服务器 ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`[服务器] 启动成功`);

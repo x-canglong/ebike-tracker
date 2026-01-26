@@ -171,7 +171,7 @@ const emit = defineEmits(['refresh', 'update:refreshing', 'updated'])
 
 const chargeTypeOptions = [
   { text: '金桥智电', value: 'jinqiao' },
-  { text: '富联e充', value: 'fulian' },
+  { text: '富连e充', value: 'fulian' },
   { text: '手动投币', value: 'manual' }
 ]
 
@@ -223,7 +223,7 @@ const formatMinutes = (minutes) => {
 const getChargeTypeName = (type) => {
   const typeMap = {
     'jinqiao': '金桥智电',
-    'fulian': '富联e充',
+    'fulian': '富连e充',
     'manual': '手动投币'
   }
   return typeMap[type] || type
@@ -241,7 +241,7 @@ const openEditDialog = (record) => {
     mileage: record.mileage.toString(),
     charge_minutes: record.charge_minutes ? record.charge_minutes.toString() : '',
     cost: record.cost ? record.cost.toString() : '',
-    charge_type: record.charge_type || 'jinqiao',
+    charge_type: record.charge_type || 'fulian',
     note: record.note || ''
   }
   // 设置picker的默认选中索引

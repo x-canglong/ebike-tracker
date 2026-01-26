@@ -100,7 +100,7 @@ const emit = defineEmits(['submit'])
 
 const chargeTypeOptions = [
   { text: '金桥智电', value: 'jinqiao' },
-  { text: '富联e充', value: 'fulian' },
+  { text: '富连e充', value: 'fulian' },
   { text: '手动投币', value: 'manual' }
 ]
 
@@ -109,7 +109,7 @@ const showChargeTypePicker = ref(false)
 // 从localStorage读取上次选择的充电方式
 const getLastChargeType = () => {
   const lastType = localStorage.getItem('lastChargeType')
-  return lastType || 'jinqiao'
+  return lastType || 'fulian'
 }
 
 const getChargeTypeIndex = (type) => {
